@@ -82,7 +82,8 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   }));
 
   app.get("/api/catalog", async () => ({
-    entities: listCatalog()
+    entities: listCatalog(),
+    fieldTypes: ["string", "email", "cpf", "boolean", "date", "number"]
   }));
 
   app.post("/api/workbooks/upload", async (request, reply) => {

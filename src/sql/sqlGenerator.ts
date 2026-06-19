@@ -5,7 +5,7 @@ export function buildInsertScript(
   columns: string[],
   rows: Array<Record<string, SqlValue>>
 ): string {
-  const quotedTable = quoteIdentifier(tableName);
+  const quotedTable = quoteQualifiedIdentifier(tableName);
   const quotedColumns = columns.map(quoteIdentifier).join(", ");
   const statements = rows.map((row) => {
     const values = columns.map((column) => formatSqlValue(row[column])).join(", ");
@@ -15,9 +15,25 @@ export function buildInsertScript(
   return ["BEGIN;", ...statements, "COMMIT;"].join("\n");
 }
 
+export function isSafeIdentifier(identifier: string): boolean {
+  return /^[a-z_][a-z0-9_]*$/i.test(identifier);
+}
+
+export function isSafeQualifiedIdentifier(identifier: string): boolean {
+  return identifier.split(".").every((part) => isSafeIdentifier(part));
+}
+
+function quoteQualifiedIdentifier(identifier: string): string {
+  if (!isSafeQualifiedIdentifier(identifier)) {
+    throw new Error(`Unsafe SQL table identifier: ${identifier}`);
+  }
+
+  return identifier.split(".").map(quoteIdentifier).join(".");
+}
+
 function quoteIdentifier(identifier: string): string {
-  if (!/^[a-z_][a-z0-9_]*$/i.test(identifier)) {
-    throw new Error(`Unsafe SQL identifier in internal catalog: ${identifier}`);
+  if (!isSafeIdentifier(identifier)) {
+    throw new Error(`Unsafe SQL identifier: ${identifier}`);
   }
 
   return `"${identifier.replace(/"/g, "\"\"")}"`;

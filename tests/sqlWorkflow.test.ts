@@ -5,33 +5,42 @@ import { parseWorkbook } from "../src/excel/parseWorkbook";
 import { generateSqlFromWorkbook } from "../src/sql/generateSqlFromWorkbook";
 
 describe("SQL workflow", () => {
-  it("validates a workbook and generates escaped SQL", async () => {
+  it("validates a workbook against a dynamic table and generates escaped SQL", async () => {
     const buffer = await createWorkbook([
-      ["Nome", "Email", "CPF", "Ativo"],
-      ["Ana O'Brien", "ANA@example.com", "529.982.247-25", "sim"],
-      ["Bruno Silva", "bruno@example.com", "111.444.777-35", "nao"]
+      ["Nome", "Email", "Idade", "Ignorar"],
+      ["Ana O'Brien", "ANA@example.com", "31", "fora"],
+      ["Bruno Silva", "bruno@example.com", 42, "fora"]
     ]);
 
     const workbook = await parseWorkbook(buffer, { id: "00000000-0000-4000-8000-000000000001" });
     const result = generateSqlFromWorkbook(workbook, {
       workbookId: workbook.id,
       sheetName: "Usuarios",
-      entity: "users",
+      table: {
+        name: "public.customers",
+        columns: [
+          { name: "name", label: "Nome", required: true, type: "string", maxLength: 120 },
+          { name: "email", label: "Email", required: true, type: "email", unique: true },
+          { name: "age", label: "Idade", type: "number" },
+          "notes"
+        ]
+      },
       mapping: {
         name: "Nome",
         email: "Email",
-        cpf: "CPF",
-        is_active: "Ativo"
+        age: "Idade"
       }
     });
 
     expect(result.summary.insertedRows).toBe(2);
+    expect(result.summary.table).toBe("public.customers");
+    expect(result.summary.columns).toEqual(["name", "email", "age"]);
     expect(result.sql).toContain("BEGIN;");
     expect(result.sql).toContain("COMMIT;");
+    expect(result.sql).toContain('INSERT INTO "public"."customers" ("name", "email", "age")');
     expect(result.sql).toContain("'Ana O''Brien'");
     expect(result.sql).toContain("'ana@example.com'");
-    expect(result.sql).toContain("'52998224725'");
-    expect(result.sql).toContain("FALSE");
+    expect(result.sql).toContain("31");
   });
 
   it("stops at the first duplicated unique value", async () => {

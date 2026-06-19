@@ -46,7 +46,15 @@ describe("API workflow", () => {
       payload: JSON.stringify({
         workbookId: uploadBody.workbookId,
         sheetName: "Usuarios",
-        entity: "users",
+        table: {
+          name: "users",
+          columns: [
+            { name: "name", label: "Nome", required: true, type: "string" },
+            { name: "email", label: "Email", required: true, type: "email", unique: true },
+            { name: "cpf", label: "CPF", required: true, type: "cpf", unique: true },
+            { name: "is_active", label: "Ativo", type: "boolean" }
+          ]
+        },
         mapping: {
           name: "Nome",
           email: "Email",

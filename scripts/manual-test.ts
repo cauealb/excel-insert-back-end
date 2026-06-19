@@ -23,7 +23,15 @@ async function main(): Promise<void> {
   const result = generateSqlFromWorkbook(parsedWorkbook, {
     workbookId: parsedWorkbook.id,
     sheetName: "Usuarios",
-    entity: "users",
+    table: {
+      name: "users",
+      columns: [
+        { name: "name", label: "Nome", required: true, type: "string", maxLength: 120 },
+        { name: "email", label: "Email", required: true, type: "email", unique: true },
+        { name: "cpf", label: "CPF", required: true, type: "cpf", unique: true },
+        { name: "is_active", label: "Ativo", type: "boolean" }
+      ]
+    },
     mapping: {
       name: "Nome",
       email: "Email",

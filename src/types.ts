@@ -1,6 +1,6 @@
-export type EntityName = "users";
+export type EntityName = string;
 
-export type FieldType = "string" | "email" | "cpf" | "boolean" | "date";
+export type FieldType = "string" | "email" | "cpf" | "boolean" | "date" | "number";
 
 export interface FieldCatalogEntry {
   field: string;
@@ -17,6 +17,25 @@ export interface EntityCatalogEntry {
   tableName: string;
   label: string;
   fields: FieldCatalogEntry[];
+}
+
+export type TableColumnDefinition =
+  | string
+  | {
+      name: string;
+      field?: string;
+      column?: string;
+      label?: string;
+      required?: boolean;
+      type?: FieldType;
+      unique?: boolean;
+      maxLength?: number;
+    };
+
+export interface DynamicTableDefinition {
+  name: string;
+  label?: string;
+  columns: TableColumnDefinition[];
 }
 
 export type ExcelCellPrimitive = string | number | boolean | Date | null;
@@ -58,7 +77,8 @@ export interface ValidationIssue {
 export interface GenerateSqlRequest {
   workbookId: string;
   sheetName: string;
-  entity: string;
+  entity?: string;
+  table?: DynamicTableDefinition;
   mapping: Record<string, string>;
 }
 

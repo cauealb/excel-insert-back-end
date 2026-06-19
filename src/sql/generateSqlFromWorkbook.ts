@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { getEntityCatalog } from "../catalog/entities";
 import { AppError, ValidationError } from "../errors";
-import { buildInsertScript } from "./sqlGenerator";
+import { buildInsertScript, isSafeIdentifier, isSafeQualifiedIdentifier } from "./sqlGenerator";
 import { cellValueToString, formatDateOnly } from "../excel/parseWorkbook";
 import type {
+  DynamicTableDefinition,
   ExcelCellPrimitive,
   FieldCatalogEntry,
   GenerateSqlRequest,
@@ -15,14 +16,58 @@ import type {
   WorkbookSnapshot
 } from "../types";
 
+const fieldTypeSchema = z.enum(["string", "email", "cpf", "boolean", "date", "number"]);
+const identifierSchema = z
+  .string()
+  .min(1)
+  .refine(isSafeIdentifier, "identificador SQL invalido");
+const qualifiedIdentifierSchema = z
+  .string()
+  .min(1)
+  .refine(isSafeQualifiedIdentifier, "identificador SQL qualificado invalido");
+
+const tableColumnSchema = z.union([
+  identifierSchema,
+  z
+    .object({
+      name: identifierSchema,
+      field: identifierSchema.optional(),
+      column: identifierSchema.optional(),
+      label: z.string().min(1).optional(),
+      required: z.boolean().optional(),
+      type: fieldTypeSchema.optional(),
+      unique: z.boolean().optional(),
+      maxLength: z.number().int().positive().optional()
+    })
+    .strict()
+]);
+
+const dynamicTableSchema = z
+  .object({
+    name: qualifiedIdentifierSchema,
+    label: z.string().min(1).optional(),
+    columns: z.array(tableColumnSchema).min(1)
+  })
+  .strict();
+
 export const generateSqlRequestSchema = z
   .object({
     workbookId: z.string().uuid(),
     sheetName: z.string().min(1),
-    entity: z.string().min(1),
+    entity: z.string().min(1).optional(),
+    table: dynamicTableSchema.optional(),
     mapping: z.record(z.string().min(1), z.string().min(1))
   })
-  .strict();
+  .strict()
+  .superRefine((request, context) => {
+    if (!request.entity && !request.table) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["table"],
+        message: "informe table para tabela dinamica ou entity para catalogo legado"
+      });
+    }
+  });
 
 interface FieldColumnBinding {
   field: FieldCatalogEntry;
@@ -33,11 +78,7 @@ export function generateSqlFromWorkbook(
   workbook: WorkbookSnapshot,
   request: GenerateSqlRequest
 ): GenerateSqlResult {
-  const entity = getEntityCatalog(request.entity);
-
-  if (!entity) {
-    throw new AppError(400, "UNKNOWN_ENTITY", `Entidade nao permitida: ${request.entity}`);
-  }
+  const entity = resolveEntity(request);
 
   const sheet = workbook.sheets.find((candidate) => candidate.name === request.sheetName);
 
@@ -59,6 +100,107 @@ export function generateSqlFromWorkbook(
       columns
     }
   };
+}
+
+function resolveEntity(request: GenerateSqlRequest) {
+  if (request.table) {
+    return buildEntityFromDynamicTable(request.table);
+  }
+
+  if (!request.entity) {
+    throw new AppError(400, "TABLE_REQUIRED", "Informe a tabela dinamica ou uma entidade do catalogo");
+  }
+
+  const entity = getEntityCatalog(request.entity);
+
+  if (!entity) {
+    throw new AppError(400, "UNKNOWN_ENTITY", `Entidade nao permitida: ${request.entity}`);
+  }
+
+  return entity;
+}
+
+function buildEntityFromDynamicTable(table: DynamicTableDefinition) {
+  if (!isSafeQualifiedIdentifier(table.name)) {
+    throw new AppError(400, "INVALID_TABLE_DEFINITION", `Nome de tabela invalido: ${table.name}`);
+  }
+
+  if (table.columns.length === 0) {
+    throw new AppError(400, "INVALID_TABLE_DEFINITION", "Informe ao menos uma coluna da tabela");
+  }
+
+  const fields: FieldCatalogEntry[] = [];
+  const fieldNames = new Set<string>();
+  const columnNames = new Set<string>();
+
+  for (const columnDefinition of table.columns) {
+    const field = normalizeColumnDefinition(columnDefinition);
+
+    if (fieldNames.has(field.field)) {
+      throw new AppError(
+        400,
+        "INVALID_TABLE_DEFINITION",
+        `Campo duplicado na definicao da tabela: ${field.field}`
+      );
+    }
+
+    if (columnNames.has(field.column)) {
+      throw new AppError(
+        400,
+        "INVALID_TABLE_DEFINITION",
+        `Coluna SQL duplicada na definicao da tabela: ${field.column}`
+      );
+    }
+
+    fieldNames.add(field.field);
+    columnNames.add(field.column);
+    fields.push(field);
+  }
+
+  return {
+    entity: table.name,
+    tableName: table.name,
+    label: table.label ?? table.name,
+    fields
+  };
+}
+
+function normalizeColumnDefinition(
+  columnDefinition: DynamicTableDefinition["columns"][number]
+): FieldCatalogEntry {
+  if (typeof columnDefinition === "string") {
+    ensureSafeColumnIdentifier(columnDefinition);
+
+    return {
+      field: columnDefinition,
+      column: columnDefinition,
+      label: columnDefinition,
+      required: false,
+      type: "string"
+    };
+  }
+
+  const field = columnDefinition.field ?? columnDefinition.name;
+  const column = columnDefinition.column ?? columnDefinition.name;
+
+  ensureSafeColumnIdentifier(field);
+  ensureSafeColumnIdentifier(column);
+
+  return {
+    field,
+    column,
+    label: columnDefinition.label ?? columnDefinition.name,
+    required: columnDefinition.required ?? false,
+    type: columnDefinition.type ?? "string",
+    unique: columnDefinition.unique,
+    maxLength: columnDefinition.maxLength
+  };
+}
+
+function ensureSafeColumnIdentifier(identifier: string): void {
+  if (!isSafeIdentifier(identifier)) {
+    throw new AppError(400, "INVALID_TABLE_DEFINITION", `Identificador de coluna invalido: ${identifier}`);
+  }
 }
 
 function buildBindings(
@@ -86,7 +228,7 @@ function buildBindings(
           column: null,
           field: fieldName,
           value: mapping[fieldName],
-          reason: "campo nao permitido no catalogo interno"
+          reason: "campo nao permitido na definicao da tabela"
         },
         400
       );
@@ -245,6 +387,8 @@ function validateCell(
       return validateBoolean(field, rawValue, row, header);
     case "date":
       return validateDate(field, rawValue, row, header);
+    case "number":
+      return validateNumber(field, rawValue, row, header);
     default:
       throw cellError(field, rawValue, row, header, "tipo de campo nao suportado");
   }
@@ -348,6 +492,26 @@ function validateDate(
   }
 
   return formatDateOnly(date);
+}
+
+function validateNumber(
+  field: FieldCatalogEntry,
+  rawValue: ExcelCellPrimitive,
+  row: SheetRowSnapshot,
+  header: HeaderInfo
+): number {
+  if (typeof rawValue === "number" && Number.isFinite(rawValue)) {
+    return rawValue;
+  }
+
+  const normalized = cellValueToString(rawValue).trim().replace(",", ".");
+  const value = Number(normalized);
+
+  if (!Number.isFinite(value)) {
+    throw cellError(field, rawValue, row, header, "numero invalido");
+  }
+
+  return value;
 }
 
 function parseDate(value: ExcelCellPrimitive): Date | null {
